@@ -19,18 +19,23 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	})
 }
 
-// Handler für /metrics: Gibt die aktuelle Anzahl der Aufrufe zurück (nur GET).
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+// Handler für /admin/metrics: Gibt die aktuelle Anzahl der Aufrufe als HTML zurück (nur GET).
+func (cfg *apiConfig) handlerAdminMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "Hits: %d", cfg.fileserverHits.Load())
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+</html>`, cfg.fileserverHits.Load())
 }
 
-// Handler für /reset: Setzt den Zähler zurück (nur POST).
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+// Handler für /admin/reset: Setzt den Zähler zurück (nur POST).
+func (cfg *apiConfig) handlerAdminReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -59,11 +64,11 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// Metrik-Endpunkt (nur GET)
-	mux.HandleFunc("/api/metrics", apiCfg.handlerMetrics)
+	// Admin-Metrik-Endpunkt (nur GET, HTML)
+	mux.HandleFunc("/admin/metrics", apiCfg.handlerAdminMetrics)
 
-	// Reset-Endpunkt (nur POST)
-	mux.HandleFunc("/api/reset", apiCfg.handlerReset)
+	// Admin-Reset-Endpunkt (nur POST)
+	mux.HandleFunc("/admin/reset", apiCfg.handlerAdminReset)
 
 	// Erstellt und startet den HTTP-Server auf Port 8080 mit dem konfigurierten ServeMux
 	server := &http.Server{
@@ -72,3 +77,14 @@ func main() {
 	}
 	server.ListenAndServe() // Startet den Server (blockierend)
 }
+
+/*
+Dokumentation:
+--------------
+- /app/ (FileServer): Statische Dateien, jeder Zugriff erhöht den Zähler.
+- /admin/metrics (GET): Gibt die aktuelle Anzahl der Zugriffe als HTML-Seite zurück.
+- /admin/reset (POST): Setzt den Zugriffszähler auf 0 zurück.
+- /api/healthz (GET): Readiness-Check, gibt "OK" zurück.
+- Die Middleware zählt alle Zugriffe auf /app/.
+- Die Zählvariable ist threadsicher durch atomic.Int32.
+*/

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -46,10 +47,43 @@ func (cfg *apiConfig) handlerAdminReset(w http.ResponseWriter, r *http.Request) 
 	w.Write([]byte("OK"))
 }
 
+// Hilfsfunktion: Fehler als JSON senden
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	resp, _ := json.Marshal(map[string]string{"error": msg})
+	w.Write(resp)
+}
+
+// Hilfsfunktion: Beliebiges JSON senden
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	resp, _ := json.Marshal(payload)
+	w.Write(resp)
+}
+
+// Ersetzt "böse" Wörter durch **** (case-insensitive, nur exakte Wortübereinstimmung)
+func cleanProfanity(text string) string {
+	badWords := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	words := strings.Split(text, " ")
+	for i, word := range words {
+		lower := strings.ToLower(word)
+		if _, found := badWords[lower]; found {
+			words[i] = "****"
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 // Handler für /api/validate_chirp: Prüft die Länge des Chirps und gibt das Ergebnis als JSON zurück.
 func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"Method Not Allowed"}`, http.StatusMethodNotAllowed)
+		respondWithError(w, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
 
@@ -59,32 +93,25 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	type errorResponse struct {
 		Error string `json:"error"`
 	}
-	type validResponse struct {
-		Valid bool `json:"valid"`
+	type cleanedResponse struct {
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	var req requestBody
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		resp, _ := json.Marshal(errorResponse{Error: "Something went wrong"})
-		w.Write(resp)
+		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
 	}
 
 	if len(req.Body) > 140 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		resp, _ := json.Marshal(errorResponse{Error: "Chirp is too long"})
-		w.Write(resp)
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	resp, _ := json.Marshal(validResponse{Valid: true})
-	w.Write(resp)
+	cleaned := cleanProfanity(req.Body)
+	respondWithJSON(w, http.StatusOK, cleanedResponse{CleanedBody: cleaned})
 }
 
 func main() {
@@ -131,7 +158,7 @@ Dokumentation:
 - /admin/reset (POST): Setzt den Zugriffszähler auf 0 zurück.
 - /api/healthz (GET): Readiness-Check, gibt "OK" zurück.
 - /api/validate_chirp (POST): Erwartet JSON {"body": "..."} und prüft, ob der Text <= 140 Zeichen ist.
-  - Bei Erfolg: {"valid":true}
+  - Bei Erfolg: {"cleaned_body":"..."} (böse Wörter werden durch **** ersetzt)
   - Bei Fehler: {"error":"Chirp is too long"} oder {"error":"Something went wrong"}
 - Die Middleware zählt alle Zugriffe auf /app/.
 - Die Zählvariable ist threadsicher durch atomic.Int32.

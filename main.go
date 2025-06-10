@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -45,6 +46,47 @@ func (cfg *apiConfig) handlerAdminReset(w http.ResponseWriter, r *http.Request) 
 	w.Write([]byte("OK"))
 }
 
+// Handler für /api/validate_chirp: Prüft die Länge des Chirps und gibt das Ergebnis als JSON zurück.
+func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method Not Allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	type requestBody struct {
+		Body string `json:"body"`
+	}
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+	type validResponse struct {
+		Valid bool `json:"valid"`
+	}
+
+	var req requestBody
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		resp, _ := json.Marshal(errorResponse{Error: "Something went wrong"})
+		w.Write(resp)
+		return
+	}
+
+	if len(req.Body) > 140 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		resp, _ := json.Marshal(errorResponse{Error: "Chirp is too long"})
+		w.Write(resp)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	resp, _ := json.Marshal(validResponse{Valid: true})
+	w.Write(resp)
+}
+
 func main() {
 	mux := http.NewServeMux()
 	apiCfg := &apiConfig{}
@@ -70,6 +112,9 @@ func main() {
 	// Admin-Reset-Endpunkt (nur POST)
 	mux.HandleFunc("/admin/reset", apiCfg.handlerAdminReset)
 
+	// Chirp-Validierungs-Endpunkt (nur POST, JSON)
+	mux.HandleFunc("/api/validate_chirp", handlerValidateChirp)
+
 	// Erstellt und startet den HTTP-Server auf Port 8080 mit dem konfigurierten ServeMux
 	server := &http.Server{
 		Addr:    ":8080",
@@ -85,6 +130,9 @@ Dokumentation:
 - /admin/metrics (GET): Gibt die aktuelle Anzahl der Zugriffe als HTML-Seite zurück.
 - /admin/reset (POST): Setzt den Zugriffszähler auf 0 zurück.
 - /api/healthz (GET): Readiness-Check, gibt "OK" zurück.
+- /api/validate_chirp (POST): Erwartet JSON {"body": "..."} und prüft, ob der Text <= 140 Zeichen ist.
+  - Bei Erfolg: {"valid":true}
+  - Bei Fehler: {"error":"Chirp is too long"} oder {"error":"Something went wrong"}
 - Die Middleware zählt alle Zugriffe auf /app/.
 - Die Zählvariable ist threadsicher durch atomic.Int32.
 */

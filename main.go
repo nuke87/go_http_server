@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -51,10 +52,11 @@ func main() {
 	mux.Handle("/app/", fsHandler)
 
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
-	mux.HandleFunc("POST /api/validate_chirp", handlerChirpsValidate)
+	//mux.HandleFunc("POST /api/validate_chirp", handlerChirpsValidate)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -143,6 +145,84 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json") // Antwort als JSON deklarieren
 	w.WriteHeader(http.StatusCreated)                  // HTTP-Status 201 Created setzen
 	json.NewEncoder(w).Encode(user)                    // User-Objekt als JSON zurückgeben
+}
+
+// Handler für /api/chirps (POST)
+// Erwartet JSON {"body": "...", "user_id": "..."}.
+// Prüft die Länge und ersetzt ggf. "böse" Wörter. Speichert das Chirp in der DB und gibt es als JSON zurück.
+func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type requestBody struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+	type chirpResponse struct {
+		ID        uuid.UUID `json:"id"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	var req requestBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Body == "" || req.UserID == uuid.Nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Body) > 140 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(errorResponse{Error: "Chirp is too long"})
+		return
+	}
+
+	// Profanity-Filter anwenden
+	badWords := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	words := strings.Split(req.Body, " ")
+	for i, word := range words {
+		if _, found := badWords[strings.ToLower(word)]; found {
+			words[i] = "****"
+		}
+	}
+	cleanedBody := strings.Join(words, " ")
+
+	// Chirp in der Datenbank speichern
+	id := uuid.New()
+	now := time.Now().UTC()
+	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		ID:        id,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Body:      cleanedBody,
+		UserID:    req.UserID,
+	})
+	if err != nil {
+		http.Error(w, `{"error":"could not create chirp"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Chirp als JSON zurückgeben
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(chirpResponse{
+		ID:        chirp.ID,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+	})
 }
 
 /*
